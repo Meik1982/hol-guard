@@ -68,9 +68,7 @@ def test_cloud_fail_closed_policy_config_maps_security_levels(tmp_path: Path) ->
     assert _cloud_fail_closed_decision(store=store, workspace_dir=tmp_path / "workspace") == "ask"
 
 
-def test_strict_mode_timeout_requires_explicit_review(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_strict_mode_timeout_requires_explicit_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = GuardStore(tmp_path / "guard-home")
     (store.guard_home / "config.toml").write_text('security_level = "strict"\n', encoding="utf-8")
     _seed_guard_cloud(store, workspace_id=WORKSPACE_ID)
@@ -202,6 +200,65 @@ def test_unidentified_package_reason_fires_for_supported_ecosystem(tmp_path: Pat
     assert "unidentified_package" in codes
     unidentified = next(r for r in result.packages[0]["reasons"] if r["code"] == "unidentified_package")
     assert unidentified["severity"] == "medium"
+    assert "Local Guard" not in result.user_copy.harness_message
+    assert "HOL Guard on this device" in result.packages[0]["reasons"][0]["message"]
+
+
+@pytest.mark.parametrize("command", ["pipx install hol-guard --force", "pip install plugin-scanner==3.0.182"])
+def test_registry_install_of_guard_package_does_not_need_local_reputation(
+    tmp_path: Path,
+    command: str,
+) -> None:
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+    result = evaluate_package_request_artifact(
+        artifact=artifact_from_command_fixture(command, workspace=workspace_dir),
+        store=GuardStore(tmp_path / "home"),
+        workspace_dir=workspace_dir,
+        now="2026-05-19T00:00:00Z",
+    )
+
+    assert result.decision == "allow"
+    assert result.policy_action == "allow"
+    assert result.packages[0]["reasons"][0]["code"] == "first_party_registry_package"
+    assert "Local Guard" not in result.user_copy.harness_message
+    assert "own PyPI package" in result.user_copy.harness_message
+
+
+def test_non_registry_install_of_hol_guard_still_requires_review(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+    result = evaluate_package_request_artifact(
+        artifact=artifact_from_command_fixture(
+            "pip install 'hol-guard @ git+https://github.com/example/hol-guard.git'",
+            workspace=workspace_dir,
+        ),
+        store=GuardStore(tmp_path / "home"),
+        workspace_dir=workspace_dir,
+        now="2026-05-19T00:00:00Z",
+    )
+
+    assert result.decision == "ask"
+    assert result.policy_action == "require-reapproval"
+    assert result.packages[0]["reasons"][0]["code"] != "first_party_registry_package"
+
+
+def test_alternate_index_install_of_hol_guard_still_requires_review(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+    result = evaluate_package_request_artifact(
+        artifact=artifact_from_command_fixture(
+            "pipx install hol-guard --index-url https://example.invalid/simple",
+            workspace=workspace_dir,
+        ),
+        store=GuardStore(tmp_path / "home"),
+        workspace_dir=workspace_dir,
+        now="2026-05-19T00:00:00Z",
+    )
+
+    assert result.decision == "ask"
+    assert result.policy_action == "require-reapproval"
+    assert "first_party_registry_package" not in {reason["code"] for reason in result.packages[0]["reasons"]}
 
 
 def test_unidentified_package_blocks_under_strict_policy(tmp_path: Path) -> None:

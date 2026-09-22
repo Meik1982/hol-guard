@@ -1006,6 +1006,8 @@ def _finalize_evaluation(
     }
     if reason_code in source_risk_summaries and reason_message is not None:
         risk_summary = f"{prefix} `{package_ref}` {source_risk_summaries[reason_code]}"
+    if reason_code == "first_party_registry_package":
+        risk_summary = f"HOL Guard allowed `{package_ref}` because {package_display} is HOL Guard's own PyPI package."
     fix_command = _fix_command(primary_package)
     title = {
         "block": "Critical install blocked",
@@ -3001,6 +3003,54 @@ def _package_target_result(
     return result
 
 
+_FIRST_PARTY_PYPI_PACKAGES = frozenset({"hol-guard", "plugin-scanner"})
+_ALTERNATE_PACKAGE_INDEX_FLAGS = frozenset(
+    {
+        "--index-url",
+        "--extra-index-url",
+        "--index",
+        "-i",
+        "--find-links",
+        "--pip-args",
+    }
+)
+
+
+def _command_uses_alternate_package_index(artifact: GuardArtifact) -> bool:
+    flags = set(_string_tuple(artifact.metadata.get("flags")))
+    return bool(flags & _ALTERNATE_PACKAGE_INDEX_FLAGS)
+
+
+def _first_party_registry_package_result(target: dict[str, object]) -> dict[str, object] | None:
+    """Allow a registry install of HOL Guard's own package without a cloud lookup."""
+
+    if _optional_string(target.get("ecosystem")) != "pypi":
+        return None
+    if _optional_string(target.get("source_url")) is not None:
+        return None
+    if _optional_string(target.get("source_kind")) is not None:
+        return None
+    raw_spec = _optional_string(target.get("raw_spec")) or ""
+    if "://" in raw_spec or raw_spec.startswith(("git+", "file:", "./", "../", "/")):
+        return None
+    normalized_name = _optional_string(target.get("normalized_name"))
+    if normalized_name is None:
+        normalized_name = _normalize_package_name("pypi", str(target.get("name") or ""))
+    if normalized_name not in _FIRST_PARTY_PYPI_PACKAGES:
+        return None
+    package_name = str(target.get("name") or normalized_name)
+    return _heuristic_package_result(
+        target=target,
+        decision="allow",
+        code="first_party_registry_package",
+        message=(
+            f"{package_name} is HOL Guard's own PyPI package. "
+            "A registry install does not need a separate local reputation lookup."
+        ),
+        severity="low",
+    )
+
+
 def _unknown_package_result(
     target: dict[str, object],
     *,
@@ -3017,7 +3067,7 @@ def _unknown_package_result(
     package_name = str(target.get("name") or "this package")
     no_match_message = (
         (
-            f"Local Guard does not have enough current information to automatically allow {package_name}. "
+            f"HOL Guard on this device does not have current package reputation for {package_name}. "
             "Review this install now. Guard Cloud is optional and can add live package reputation."
         )
         if requires_review
@@ -3064,25 +3114,37 @@ def _fallback_package_results(
         return tuple(bun_fallback_packages)
     lockfile_versions = _lockfile_dependency_versions(workspace_dir, artifact, targets)
     flags = set(_string_tuple(artifact.metadata.get("flags")))
-    return tuple(
-        _unknown_package_result(
-            target,
-            fail_closed_unidentified=fail_closed_unidentified,
-            identity_resolved=(
-                (
-                    _optional_string(target.get("ecosystem")) == "npm"
-                    and "--ignore-scripts" in flags
-                    and _lockfile_target_key(target) in lockfile_versions
-                )
-                or (
-                    verify_registry_identity
-                    and (requested_range := _optional_string(target.get("range"))) is not None
-                    and _registry_resolved_target_version(target=target, requested_range=requested_range) is not None
-                )
-            ),
+    alternate_index = _command_uses_alternate_package_index(artifact)
+    results: list[dict[str, object]] = []
+    for target in targets:
+        if not alternate_index:
+            first_party = _first_party_registry_package_result(target)
+            if first_party is not None:
+                results.append(first_party)
+                continue
+        results.append(
+            _unknown_package_result(
+                target,
+                fail_closed_unidentified=fail_closed_unidentified,
+                identity_resolved=(
+                    (
+                        _optional_string(target.get("ecosystem")) == "npm"
+                        and "--ignore-scripts" in flags
+                        and _lockfile_target_key(target) in lockfile_versions
+                    )
+                    or (
+                        verify_registry_identity
+                        and (requested_range := _optional_string(target.get("range"))) is not None
+                        and _registry_resolved_target_version(
+                            target=target,
+                            requested_range=requested_range,
+                        )
+                        is not None
+                    )
+                ),
+            )
         )
-        for target in targets
-    )
+    return tuple(results)
 
 
 def _bun_lockfile_binary_fallback_packages(
