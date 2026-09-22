@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import os
 import re
 import shlex
 import sys
@@ -3040,6 +3041,7 @@ _PACKAGE_SOURCE_ENV_NAMES = frozenset(
         "PIP_NO_INDEX",
         "UV_DEFAULT_INDEX",
         "UV_EXTRA_INDEX_URL",
+        "UV_FIND_LINKS",
         "UV_INDEX",
         "UV_INDEX_URL",
         "UV_NO_INDEX",
@@ -3056,7 +3058,9 @@ def _command_uses_alternate_package_index(artifact: GuardArtifact) -> bool:
         tokens = shlex.split(redacted)
     except ValueError:
         return True
-    return any(token.partition("=")[0].upper() in _PACKAGE_SOURCE_ENV_NAMES for token in tokens)
+    if any(token.partition("=")[0].upper() in _PACKAGE_SOURCE_ENV_NAMES for token in tokens):
+        return True
+    return any(os.environ.get(name, "").strip() for name in _PACKAGE_SOURCE_ENV_NAMES)
 
 
 def _installed_project_version(project_name: str) -> str | None:
