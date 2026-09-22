@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import json
 import re
+import shlex
 import sys
 import time
 import urllib.error
@@ -994,6 +995,18 @@ def _finalize_evaluation(
     }[draft.decision]
     reason_message = _optional_string(draft.reasons[0].get("message")) if draft.reasons else None
     reason_code = _optional_string(draft.reasons[0].get("code")) if draft.reasons else None
+    if reason_code == "first_party_registry_package" and draft.decision != "allow":
+        restrictive_reason = next(
+            (
+                reason
+                for reason in draft.reasons
+                if _optional_string(reason.get("code")) != "first_party_registry_package"
+            ),
+            None,
+        )
+        if restrictive_reason is not None:
+            reason_message = _optional_string(restrictive_reason.get("message"))
+            reason_code = _optional_string(restrictive_reason.get("code"))
     policy_action: GuardAction = (
         "review"
         if draft.decision == "ask" and reason_code == "external_tarball_source"
@@ -1006,7 +1019,7 @@ def _finalize_evaluation(
     }
     if reason_code in source_risk_summaries and reason_message is not None:
         risk_summary = f"{prefix} `{package_ref}` {source_risk_summaries[reason_code]}"
-    if reason_code == "first_party_registry_package":
+    if reason_code == "first_party_registry_package" and draft.decision == "allow":
         risk_summary = f"HOL Guard allowed `{package_ref}` because {package_display} is HOL Guard's own PyPI package."
     fix_command = _fix_command(primary_package)
     title = {
@@ -3009,16 +3022,39 @@ _ALTERNATE_PACKAGE_INDEX_FLAGS = frozenset(
         "--index-url",
         "--extra-index-url",
         "--index",
+        "--default-index",
+        "--no-index",
         "-i",
         "--find-links",
+        "-f",
         "--pip-args",
+    }
+)
+_PACKAGE_SOURCE_ENV_NAMES = frozenset(
+    {
+        "PIP_EXTRA_INDEX_URL",
+        "PIP_FIND_LINKS",
+        "PIP_INDEX_URL",
+        "PIP_NO_INDEX",
+        "UV_DEFAULT_INDEX",
+        "UV_EXTRA_INDEX_URL",
+        "UV_INDEX",
+        "UV_INDEX_URL",
+        "UV_NO_INDEX",
     }
 )
 
 
 def _command_uses_alternate_package_index(artifact: GuardArtifact) -> bool:
     flags = set(_string_tuple(artifact.metadata.get("flags")))
-    return bool(flags & _ALTERNATE_PACKAGE_INDEX_FLAGS)
+    if flags & _ALTERNATE_PACKAGE_INDEX_FLAGS:
+        return True
+    redacted = _optional_string(artifact.metadata.get("redacted_command")) or ""
+    try:
+        tokens = shlex.split(redacted)
+    except ValueError:
+        return True
+    return any(token.partition("=")[0].upper() in _PACKAGE_SOURCE_ENV_NAMES for token in tokens)
 
 
 def _first_party_registry_package_result(target: dict[str, object]) -> dict[str, object] | None:

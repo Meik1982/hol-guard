@@ -261,6 +261,44 @@ def test_alternate_index_install_of_hol_guard_still_requires_review(tmp_path: Pa
     assert "first_party_registry_package" not in {reason["code"] for reason in result.packages[0]["reasons"]}
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install hol-guard -f https://example.invalid/simple",
+        "PIP_INDEX_URL=https://example.invalid/simple pip install hol-guard",
+        "uv pip install hol-guard --default-index https://example.invalid/simple",
+    ],
+)
+def test_relocated_registry_install_of_hol_guard_still_requires_review(tmp_path: Path, command: str) -> None:
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+    result = evaluate_package_request_artifact(
+        artifact=artifact_from_command_fixture(command, workspace=workspace_dir),
+        store=GuardStore(tmp_path / "home"),
+        workspace_dir=workspace_dir,
+        now="2026-05-19T00:00:00Z",
+    )
+
+    assert result.decision in {"ask", "block"}
+    assert result.policy_action != "allow"
+    assert "HOL Guard allowed" not in result.user_copy.harness_message
+
+
+def test_mixed_install_does_not_claim_the_guard_package_allowed_the_command(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+    result = evaluate_package_request_artifact(
+        artifact=artifact_from_command_fixture("pip install hol-guard requests", workspace=workspace_dir),
+        store=GuardStore(tmp_path / "home"),
+        workspace_dir=workspace_dir,
+        now="2026-05-19T00:00:00Z",
+    )
+
+    assert result.decision == "ask"
+    assert "HOL Guard allowed" not in result.user_copy.harness_message
+    assert "requests" in result.user_copy.harness_message
+
+
 def test_unidentified_package_blocks_under_strict_policy(tmp_path: Path) -> None:
     """Strict policy fails closed when registry identity cannot be resolved."""
 
