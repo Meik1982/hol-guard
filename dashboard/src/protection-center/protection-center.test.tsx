@@ -20,6 +20,9 @@ import {
 import { EMPTY_CATALOG_FILTERS } from "./model/catalog-filters";
 import { groupProtectionModules, protectionCategoryIdForExtension } from "./model/protection-categories";
 import { deriveProtectionStatus } from "./model/protection-presentation";
+import { CustomExtensionsSection } from "./custom-extensions-section";
+import type { LocalCliItem } from "../local-cli-api";
+import { LocalCliDetail } from "./local-clis-panel";
 
 assert.equal(PROTECTION_TERMS.navigation, "Extensions");
 assert.equal(PROTECTION_TERMS.pageTitle, "Extensions");
@@ -226,5 +229,76 @@ assert.doesNotMatch(filteringBar, /<div id="catalog-filter-panel-open"[^>]*hidde
 const technical = renderToStaticMarkup(createElement(TechnicalDetails, { children: createElement("code", null, "command.git") }));
 assert.match(technical, /<details/);
 assert.doesNotMatch(technical, / open/);
+
+const baseCustomExtension: LocalCliItem = {
+  cli_id: "local-cli.fixture-abcdef12",
+  name: "Fixture connector",
+  kind: "executable",
+  identity_hash: "a".repeat(64),
+  example_label: "fixture --help",
+  interpreter_name: null,
+  observed_count: 1,
+  last_seen_at: "2026-09-29T00:00:00Z",
+  source_path: null,
+  help_status: "ok",
+  surface: "mcp",
+  server_identity_hash: null,
+  source_label: "ZCode",
+  state: "unset",
+  stale: false,
+  grant_revision: null,
+  authority_revision: 1,
+  suggestable: true,
+  suggestion_score: 1,
+  commands: [],
+};
+
+const customEmpty = renderToStaticMarkup(createElement(CustomExtensionsSection, {
+  items: [], onOpen: () => undefined, onAdd: () => undefined,
+}));
+assert.match(customEmpty, /data-testid="custom-extensions-empty"/);
+assert.match(customEmpty, /No custom extensions yet\./);
+assert.match(customEmpty, />Add custom extension</);
+assert.match(customEmpty, /custom-extensions-heading/);
+assert.doesNotMatch(customEmpty, /Search custom extensions/);
+assert.doesNotMatch(customEmpty, /Show all/);
+
+const customDiscovered = renderToStaticMarkup(createElement(CustomExtensionsSection, {
+  items: [], onOpen: () => undefined, onAdd: () => undefined, discovering: true,
+}));
+assert.match(customDiscovered, /Checking host configuration for connectors…/);
+
+const customMixed = renderToStaticMarkup(createElement(CustomExtensionsSection, {
+  items: [
+    { ...baseCustomExtension, cli_id: "local-cli.enrolled", name: "Enrolled tool", state: "allowed" },
+    { ...baseCustomExtension, cli_id: "local-cli.observed", name: "Observed tool", state: "unset" },
+  ],
+  onOpen: () => undefined, onAdd: () => undefined,
+}));
+assert.match(customMixed, /Needs review · 1/);
+assert.match(customMixed, /Reviewed · 1/);
+assert.doesNotMatch(customMixed, /custom-extensions-empty/);
+
+const customFiltered = renderToStaticMarkup(createElement(CustomExtensionsSection, {
+  items: [], onOpen: () => undefined, onAdd: () => undefined, filteredOut: true,
+  onClearFilters: () => undefined,
+}));
+assert.match(customFiltered, /data-testid="custom-extensions-filter-empty"/);
+assert.match(customFiltered, /No custom extensions match these filters\./);
+assert.match(customFiltered, /Clear filters/);
+assert.doesNotMatch(customFiltered, /No custom extensions yet\./);
+
+for (const state of ["unset", "allowed", "blocked"] as const) {
+  const detail = renderToStaticMarkup(createElement(LocalCliDetail, {
+    item: { ...baseCustomExtension, surface: "mcp", state, name: "Synthetic MCP connector" },
+    revision: 0,
+    continuity: { sync_local_only: true, continuity_enabled: false, summary: "Local fixture" },
+    onBack: () => undefined,
+    onRefresh: async () => undefined,
+  }));
+  assert.match(detail, /data-testid="local-cli-detail"/);
+  assert.match(detail, /Synthetic MCP connector/);
+  assert.match(detail, /Refresh inventory/);
+}
 
 console.log("protection-center.test.tsx: all assertions passed");
